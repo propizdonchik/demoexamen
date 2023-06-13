@@ -6,21 +6,25 @@ ISP
 auto ens# ens# ens#
 iface ens# inet dhcp
 iface ens# inet static
-	address n.n.n.n/24
+	address 7.7.7.1/24
+iface ens# inet static
+	address 8.8.8.1/24
+iface ens# inet static
+	address 3.3.3.1/24
 
 RTR-L,RTR-R
 auto ens# ens#
 iface ens# inet static
-	address n.n.n.n/24
+	address 192.168.100.254/24(172.16.100.254/24)
 iface ens# inet static
-	address n.n.n.n/24
-	gateway n.n.n.n
+	address 7.7.7.7/24(8.8.8.8/24)
+	gateway 7.7.7.1(8.8.8.1)
 
-WEB-L,WEB-R,SRV
+WEB-L,WEB-R
 auto ens#
 iface ens# inet static
-	address n.n.n.n/24
-	gateway n.n.n.n
+	address 192.168.100.100/24(172.16.100.100)
+	gateway 192.168.100.254(172.16.100.254)
 
 systemctl restart networking
 
@@ -32,26 +36,26 @@ systemctl restart networking
 -table ip nat{
 	chain postrouting {
 	type nat hook postrouting priority 0;
-	ip saddr 192.168.100.0/24(172.16.100.0/24) oifname ens# counter masquerade
+	ip saddr n.n.n.0/24 oifname ens# counter masquerade;
 	}
 }
 -nft -f /etc/nftables.conf
 -systemctl enable --now nftables
--traceroute -n 5.5.5.1
+-traceroute -n 3.3.3.1 s web's, isp
 
 5. Sdelano v 4
 
 6. Zashishenniy tunnel
--/etc/gre.up
+- vim /etc/gre.up
 RTR-L
 #!/bin/bash
-ip tunnel add tun0 mode gre local 4.4.4.100 remote 5.5.5.100
+ip tunnel add tun0 mode gre local 7.7.7.100 remote 8.8.8.100
 ip addr add 10.5.5.1/30 dev tun0
 ip link set up tun0
 ip route add 172.16.100.0/24 via 10.5.5.2
 RTR-R
 #!/bin/bash
-ip tunnel add tun0 mode gre local 5.5.5.100 remote 4.4.4.100
+ip tunnel add tun0 mode gre local 8.8.8.100 remote 7.7.7.100
 ip addr add 10.5.5.2/30 dev tun0
 ip link set up tun0
 ip route add 192.168.100.0/24 via 10.5.5.1
@@ -100,8 +104,8 @@ table inet filter {
 		ip protocol gre accept;
 		ip protocol icmp accept;
 		udp dport 500 accept;
-		ip saddr 192.168.100.0/24 accept;
-		ip saddr 172.16.100.0/24 accept
+		ip saddr n.n.n.0/24 accept;
+		ip saddr n.n.n.0/24 accept
 		ip version 4 drop;
 		}
 }
@@ -124,7 +128,7 @@ chain prerouting {
 
 9. SSH RTR-R
 dopisivaem v table inet filter -> chain input
-tcp dport 2244 accept;
+tcp dport 2244 accept
 
 chain prerouting {
 	type nat hook prerouting priority filter; policy accept;
@@ -170,13 +174,13 @@ $ORIGIN	demo.wsr.
 @	IN	NS	demo.wsr.
 @	IN	A	3.3.3.1
 isp	IN	A	3.3.3.1
-www	IN	A	7.7.7.100
-www	IN	A	8.8.8.100
+www	IN	A	4.4.4.100
+www	IN	A	5.5.5.100
 internet	IN	CNAME	isp
 
 $ORIGIN	int.demo.wsr.
 @	IN	NS	int.demo.wsr.
-@	IN	A	7.7.7.100
+@	IN	A	4.4.4.100
 
 -named-checkconf
 -named-checkconf -z
@@ -206,26 +210,3 @@ WEB-L,WEB-R
 -docker run -d -p 80:5000 appdocker0
 -docker images
 -docker ps
-
-12. OSPF
--apt install frr
--vim /etc/frr/daemons
-ospfd=yes
--systemctl restart frr
--vtysh
-RTR-L
-conf t
-router ospf
-network 192.168.100.0/24 area 0
-network 10.5.5.0/30 area 0
-do wr
-RTR-R
-conf t
-router ospf
-network 172.16.100.0/24 area 0
-network 10.5.5.0/30 area 0
-do wr
-
-do sh ip ospf nei(Full Doljno Bit')
-do sh ip ospf route
-ping s Web-L do Web-R
