@@ -1,0 +1,212 @@
+1. Zadaem imena hostov
+-hostnamectl set-hostname #name; exec bash
+
+2. Ip-add
+ISP			
+auto ens# ens# ens#
+iface ens# inet dhcp
+iface ens# inet static
+	address 7.7.7.1/24
+iface ens# inet static
+	address 8.8.8.1/24
+iface ens# inet static
+	address 3.3.3.1/24
+
+RTR-L,RTR-R
+auto ens# ens#
+iface ens# inet static
+	address 192.168.100.254/24(172.16.100.254/24)
+iface ens# inet static
+	address 7.7.7.100/24(8.8.8.8/24)
+	gateway 7.7.7.1(8.8.8.1)
+
+WEB-L,WEB-R
+auto ens#
+iface ens# inet static
+	address 192.168.100.100/24(172.16.100.100)
+	gateway 192.168.100.254(172.16.100.254)
+
+systemctl restart networking
+
+3. Marshrutizacia(RTR-L,RTR-R,ISP)
+-echo "net.ipv4.ip_forward=1" > /etc/sysctl.conf; sysctl -p
+
+4. Translyacia trafika(RTR-L,RTR-R)
+-vim /etc/nftables.conf
+-table ip nat{
+	chain postrouting {
+	type nat hook postrouting priority 0;
+	ip saddr n.n.n.0/24 oifname ens# counter masquerade;
+	}
+}
+-nft -f /etc/nftables.conf
+-systemctl enable --now nftables
+-traceroute -n 3.3.3.1 s web's, isp
+
+5. Sdelano v 4
+
+6. Zashishenniy tunnel
+- vim /etc/gre.up
+RTR-L
+#!/bin/bash
+ip tunnel add tun0 mode gre local 7.7.7.100 remote 8.8.8.100
+ip addr add 10.5.5.1/30 dev tun0
+ip link set up tun0
+ip route add 172.16.100.0/24 via 10.5.5.2
+RTR-R
+#!/bin/bash
+ip tunnel add tun0 mode gre local 8.8.8.100 remote 7.7.7.100
+ip addr add 10.5.5.2/30 dev tun0
+ip link set up tun0
+ip route add 192.168.100.0/24 via 10.5.5.1
+-chmod +x /etc/gre.up
+-/etc/gre.up
+-ip --br a
+-ping 10.5.5.1
+-traceroute -n ip(web-l,web-r)
+
+Ip-sec
+
+-apt install strongswan
+-vim /etc/ipsec.conf
+RTR-R					
+conn vpn
+	auto=start
+	type=tunnel
+	authby=secret
+	left=5.5.5.100
+	right=4.4.4.100
+	leftsubnet=0.0.0.0/0
+	rightsubnet=0.0.0.0/0
+	leftprotoport=gre
+	rightprotoport=gre
+	ike=aes128-sha256-modp3072
+	esp=aes128-sha256
+
+Dlya RTR-L pomenyat' mestami left i right
+
+-vim /etc/ipsec.secrets
+4.4.4.100 5.5.5.100 : PSK "P@ssw0rd"
+-systemctl enable --now ipsec
+-ipsec status
+
+7. Platforma upravleniya trafikom RTR-L i RTR-R
+-vim /etc/nftables.conf
+
+RTR-L
+table inet filter {
+	chain input {
+		type filter hook input priority 0;
+		udp dport 53 accept;
+		tcp dport 80 accept;
+		tcp dport 443 accept;
+		ct state {established, related} accept;
+		ip protocol gre accept;
+		ip protocol icmp accept;
+		udp dport 500 accept;
+		ip saddr n.n.n.0/24 accept;
+		ip saddr n.n.n.0/24 accept
+		ip version 4 drop;
+		}
+}
+
+-nft -f /etc/nftables.conf
+-nft list ruleset
+
+Dlya RTR-R 53 otkrivat' ne nado, ostal'noe toje samoe
+
+8. SSH RTR-L
+
+RTR-L
+dopisivaem v table inet filter -> chain input
+tcp dport 2222 counter packets 0  bytes 0;
+
+dopisivaem v table ip nat
+chain prerouting {
+	type nat hook prerouting priority filter; policy accept;
+	tcp dport 2222 dnat to ipaddwebl:22
+
+9. SSH RTR-R
+dopisivaem v table inet filter -> chain input
+tcp dport 2244 accept
+
+chain prerouting {
+	type nat hook prerouting priority filter; policy accept;
+	tcp dport 2244 dnat to ipaddwebr:22
+
+-nft -f /etc/nftables.conf
+
+ISP
+-ssh user@4.4.4.100 -p 2222
+-ssh user@5.5.5.100 -p 2244
+
+10. DNS
+ISP
+-apt install bind9
+-vim /etc/bind/named.conf.options
+forwarders {
+	8.8.8.8;
+{;
+
+dnssec-validation no;
+allow-query {any;};
+recursion yes;
+listen-on { any; };
+
+-vim /etc/bind/named.conf.default-zones
+zone "demo.wsr" {
+	type master;
+	file "/etc/bind/demo.wsr";
+	forwarders {};
+};
+
+-cd /etc/bind; cp db.local demo.wsr;
+-vim demo.wsr
+$TTL 86400
+$ORIGIN	demo.wsr.
+@	IN	SOA	demo.wsr. int.demo.wsr. (
+			1		; Serial
+			604800		; Refresh
+			86400		; Retry
+			2419200		; Expire
+			86400 )		; Negative Cache TTL
+;
+@	IN	NS	demo.wsr.
+@	IN	A	3.3.3.1
+isp	IN	A	3.3.3.1
+www	IN	A	4.4.4.100
+www	IN	A	5.5.5.100
+internet	IN	CNAME	isp
+
+$ORIGIN	int.demo.wsr.
+@	IN	NS	int.demo.wsr.
+@	IN	A	4.4.4.100
+
+-named-checkconf
+-named-checkconf -z
+-systemctl restart bind9
+-host demo.wsr 3.3.3.1
+ host isp.demo.wsr 3.3.3.1
+ host www.demo.wsr 3.3.3.1
+ host internet.demo.wsr 3.3.3.1
+
+RTR-L
+-vim /etc/nftables.conf
+chain prerouting {
+	type nat hook prerouting priority filter; policy accept;
+	iifname "ens_v_ISP" udp dport 53 dnat to ipaddsrv:53;
+}
+
+11. Docker
+WEB-L,WEB-R
+-podkl docker.iso
+-mount /dev/sr1 /media/cdrom
+-cd /media/cdrom
+-cp appdockerdemo.tar.gz /root
+-cd /root
+-tar -xvf appdockerdemo.tar.gz
+-apt install docker docker.io
+-docker image load -l appdocker0.zip
+-docker run -d -p 80:5000 appdocker0
+-docker images
+-docker ps
